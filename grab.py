@@ -29,6 +29,7 @@ from bs4 import BeautifulSoup
 from PIL import Image, ImageStat
 
 TEAM_URL = "https://liberated.school/team"
+LIST_FILE = "list.txt"  # default batch input when no surname is given
 DEFAULT_CLASS = "t857__bgimg_first_hover"  # shown when NOT hovering (colour)
 HOVER_CLASS = "t857__bgimg_second"         # shown on hover (b/w childhood photo)
 USER_AGENT = (
@@ -99,6 +100,72 @@ def download(url: str) -> bytes:
     return resp.content
 
 
+def grab_one(cards, surname: str, outdir: str, verify: bool) -> bool:
+    """Find, fetch and save the colour portrait for one surname.
+
+    Returns True on success; prints a ``[skip]`` line and returns False on any
+    miss so batch runs can carry on with the remaining names.
+    """
+    needle = surname.casefold()
+    matches = [c for c in cards if needle in card_text(c).casefold()]
+    if not matches:
+        print(f"[skip] {surname}: no team member matches.", file=sys.stderr)
+        return False
+    if len(matches) > 1:
+        names = "; ".join(card_text(c) for c in matches)
+        print(
+            f"[skip] {surname}: {len(matches)} matches ({names}); "
+            f"be more specific.",
+            file=sys.stderr,
+        )
+        return False
+
+    card = matches[0]
+    name = card_text(card)
+    default_url = card_image(card, hover=False)
+    if not default_url:
+        print(f"[skip] {surname}: no default image found.", file=sys.stderr)
+        return False
+
+    if verify:
+        hover_url = card_image(card, hover=True)
+        data = download(default_url)
+        if hover_url and hover_url != default_url:
+            c_default = colourfulness(data)
+            c_hover = colourfulness(download(hover_url))
+            print(
+                f"Colour check ({name}): default={c_default:.1f}  "
+                f"hover={c_hover:.1f} (higher = more colourful)",
+                file=sys.stderr,
+            )
+            if c_hover > c_default:
+                print(
+                    "Warning: the hover image looks more colourful; the page "
+                    "layout may have changed. Keeping the default-visible image "
+                    "as requested.",
+                    file=sys.stderr,
+                )
+    else:
+        data = download(default_url)
+
+    out_path = Path(outdir) / f"{surname}{ext_from_url(default_url)}"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_bytes(data)
+    print(f"Saved {name} -> {out_path} ({len(data):,} bytes)")
+    return True
+
+
+def read_list(path: Path) -> list[str]:
+    """Surnames from a batch file: one per line, blanks and #comments ignored."""
+    names = []
+    # utf-8-sig drops a leading BOM that editors may have written.
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            names.append(line)
+    return names
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Save the default colour team photo for a surname from "
@@ -107,7 +174,8 @@ def main() -> int:
     parser.add_argument(
         "surname",
         nargs="?",
-        help="Surname to look up, e.g. Тобенгауз (case-insensitive substring).",
+        help="Surname to look up, e.g. Тобенгауз (case-insensitive substring). "
+        f"If omitted, each line of {LIST_FILE} is processed instead.",
     )
     parser.add_argument(
         "-o", "--outdir", default=".", help="Directory to save into (default: .)."
@@ -136,58 +204,25 @@ def main() -> int:
             print(card_text(card))
         return 0
 
-    if not args.surname:
-        parser.error("a surname is required (or use --list)")
-
-    needle = args.surname.casefold()
-    matches = [c for c in cards if needle in card_text(c).casefold()]
-    if not matches:
-        print(f"No team member matching {args.surname!r}.", file=sys.stderr)
-        print("Try --list to see all names.", file=sys.stderr)
-        return 1
-    if len(matches) > 1:
-        print(f"{len(matches)} matches for {args.surname!r}:", file=sys.stderr)
-        for c in matches:
-            print(f"  - {card_text(c)}", file=sys.stderr)
-        print("Use a more specific surname.", file=sys.stderr)
-        return 1
-
-    card = matches[0]
-    name = card_text(card)
-    default_url = card_image(card, hover=False)
-    if not default_url:
-        print(f"Could not find the default image for {name!r}.", file=sys.stderr)
-        return 1
-
-    chosen_url = default_url
-    if not args.no_verify:
-        hover_url = card_image(card, hover=True)
-        default_img = download(default_url)
-        if hover_url and hover_url != default_url:
-            hover_img = download(hover_url)
-            c_default = colourfulness(default_img)
-            c_hover = colourfulness(hover_img)
-            print(
-                f"Colour check: default={c_default:.1f}  hover={c_hover:.1f} "
-                f"(higher = more colourful)",
-                file=sys.stderr,
-            )
-            if c_hover > c_default:
-                print(
-                    "Warning: the hover image looks more colourful; the page "
-                    "layout may have changed. Keeping the default-visible image "
-                    "as requested.",
-                    file=sys.stderr,
-                )
-        data = default_img
+    if args.surname:
+        surnames = [args.surname]
     else:
-        data = download(chosen_url)
+        list_path = Path(LIST_FILE)
+        if not list_path.exists():
+            parser.error(
+                f"no surname given and {LIST_FILE} not found "
+                f"(pass a surname, or use --list to see all names)"
+            )
+        surnames = read_list(list_path)
+        if not surnames:
+            print(f"{LIST_FILE} has no surnames to process.", file=sys.stderr)
+            return 1
 
-    out_path = Path(args.outdir) / f"{args.surname}{ext_from_url(chosen_url)}"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_bytes(data)
-    print(f"Saved {name} -> {out_path} ({len(data):,} bytes)")
-    return 0
+    verify = not args.no_verify
+    saved = sum(grab_one(cards, s, args.outdir, verify) for s in surnames)
+    if len(surnames) > 1:
+        print(f"\nDone: {saved}/{len(surnames)} saved.")
+    return 0 if saved == len(surnames) else 1
 
 
 if __name__ == "__main__":

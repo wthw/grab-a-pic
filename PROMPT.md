@@ -12,6 +12,9 @@ The script should take a surname, e.g. `Тобенгауз`, and save `Тобе�
 **The catch:** do not save the young `Тобенгауз` boy photo (the childhood
 picture) that appears when the mouse is hovering over the portrait.
 
+When run **without an argument**, the script should look for `list.txt` and
+process it line-by-line (one surname per line).
+
 ## Notes from implementation
 
 - The page is a Tilda `t857` block. Each card stacks two images that swap on

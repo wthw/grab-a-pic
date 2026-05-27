@@ -25,12 +25,29 @@ pixi run grab Тобенгауз
 # Pick the output directory
 pixi run grab Тобенгауз -o ./photos
 
+# Batch: with no surname, read list.txt (one surname per line)
+pixi run grab
+pixi run grab -o ./photos
+
 # List every team member (to find the exact spelling)
 pixi run list
 ```
 
 The output file is named after the surname you pass, using the source image's
 extension (e.g. `Тобенгауз.png`).
+
+### Batch mode (`list.txt`)
+
+Run with **no surname** and the script reads `list.txt` from the current
+directory — one surname per line. Blank lines and `#` comments are ignored, a
+leading byte-order mark is tolerated, and an unmatched name is skipped (with a
+`[skip]` note) so the rest still run. Example `list.txt`:
+
+```
+# math department
+Тобенгауз
+Ованесян
+```
 
 ### Options
 
